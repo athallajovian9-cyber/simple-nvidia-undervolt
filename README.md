@@ -37,15 +37,16 @@ simple-nvidia-undervolt clear
 three families (perf boost / power cut at the same performance / deep power cut) in four risk
 tiers each, built from community-converged values per generation, memory type and power-limit
 class. Extract the zip, double-click `~install-simple-nvidia-undervolt.exe` once (it copies the
-app to Program Files, which the shortcuts target), then double-click a profile from the folder
-that lists your card. [PROFILES.md](PROFILES.md) explains the matrix and the values.
+app to Program Files, which the shortcuts target, and adds it to the system PATH), then
+double-click a profile from the folder that lists your card. [PROFILES.md](PROFILES.md) explains the matrix and the values.
 
 ## Usage
 
 ```
 [options]             By not specifying a verb, it is implicitly a 'tune' command: you can cap voltage
                       (flatten the curve), set the clock at the cap, and offset the memory clock.
-install               Copy the app to Program Files, so saved or profile shortcuts work.
+install               Copy the app to Program Files and add it to the system PATH, so saved or
+                      profile shortcuts work and new terminals can run the command.
 status                Show curve offset, memory clock, voltage boost, and logon re-apply.
 watch                 Poll live core voltage/clock/temp/power, tracking the max.
 clear                 Reset all tuning to stock and remove logon re-apply.
@@ -125,8 +126,8 @@ simple-nvidia-undervolt --mv 925 --dry-run --save-shortcut Quiet
 ### clear
 
 The `clear` command resets all tuning to stock: the V/F curve offsets, memory clock and core voltage boost.
-The command also stops the re-apply at logon by removing the registered task. The Program Files copy stays, so
-saved shortcuts keep working.
+The command also stops the re-apply at logon by removing the registered task. The Program Files copy and its
+PATH entry stay, so saved shortcuts and the terminal command keep working.
 
 ## Disclaimer
 

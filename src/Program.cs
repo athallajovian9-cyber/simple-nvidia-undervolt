@@ -166,16 +166,30 @@ internal static class Cli
         }, needsElevation: !request.DryRun);
     }
 
-    /// <summary>'install' copies the app into Program Files without touching the GPU or registering
-    /// anything — what pre-made profile shortcuts (which target the installed copy) need once. A
-    /// persisting tune does the same as a side effect; this is the standalone form.</summary>
+    /// <summary>'install' copies the app into Program Files and puts that directory on the system
+    /// PATH, without touching the GPU or registering anything — what pre-made profile shortcuts
+    /// (which target the installed copy) need once, and what lets any new terminal run the command
+    /// by name. A persisting tune installs the copy as a side effect; this is the standalone form.</summary>
     private static int RunInstallCommand(string[] args, bool isRelayChild)
         => RunWriteCommand(args, isRelayChild, () =>
         {
             WarnIfNotElevated();
-            Console.WriteLine(Persistence.InstallApp()
-                ? $"Installed to {Persistence.InstallDir()}."
-                : $"Already installed at {Persistence.InstallDir()}.");
+            string dir = Persistence.InstallDir();
+            Console.WriteLine(Persistence.InstallApp() ? $"Installed to {dir}." : $"Already installed at {dir}.");
+            try
+            {
+                Console.WriteLine(SystemPath.Add(dir)
+                    ? $"Added the install directory to the system PATH; new terminals can run '{Product.Name}'."
+                    : "The install directory is already on the system PATH.");
+            }
+            catch (CliError ex)
+            {
+                // The copy is in and shortcuts work regardless, so a refused PATH edit (a policy or
+                // security product guarding the Environment key) degrades to a warning instead of
+                // reading as a failed install - especially in the double-clicked installer's box.
+                Console.WriteLine($"Warning: {ex.Message}");
+            }
+
             Console.WriteLine("Shortcuts targeting the installed copy (saved or profile .lnks) now work.");
         });
 
@@ -855,8 +869,9 @@ internal static class Cli
             [options]             By not specifying a verb, it is implicitly a 'tune' command: you can
                                   cap voltage (flatten the curve), set the clock at the cap, and offset
                                   the memory clock.
-            install               Copy the app to Program Files, so saved or pre-made profile shortcuts
-                                  work. (A persisting tune installs too; this is the standalone form.)
+            install               Copy the app to Program Files and add it to the system PATH, so
+                                  shortcuts work and new terminals can run the command. (A persisting
+                                  tune installs the copy too; this is the standalone form.)
             status                Show curve offset, memory clock, voltage boost, and logon re-apply.
                                   --out-tuning-file <f> exports the applied tuning as JSON - the
                                   tuned curve anchors, keyed by voltage, plus the memory offset -

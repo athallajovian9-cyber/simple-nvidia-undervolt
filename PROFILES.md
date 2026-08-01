@@ -6,7 +6,7 @@ and large owner discussion threads, cited inline below.
 ## Setup
 
 1. Extract `simple-nvidia-undervolt-profiles.zip` from [releases](https://github.com/vuplea/simple-nvidia-undervolt/releases).
-2. Run `~install-simple-nvidia-undervolt.exe` to install the app to Program Files, where the shortcuts are targeting.
+2. Run `~install-simple-nvidia-undervolt.exe` to install the app to Program Files, where the shortcuts are targeting, and add it to the system PATH.
 3. Double-click shortcuts from the folder that lists your card to apply them.
 
 ## The matrix: three families × four risk tiers
