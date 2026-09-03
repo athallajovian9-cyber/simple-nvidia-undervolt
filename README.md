@@ -106,6 +106,16 @@ A tuning run **persists by default**: it copies the app to Program Files, and re
 task that re-applies the same undervolt at logon, elevated. If apply ever fails you get a message box
 so you are aware. Pass `--no-persist` to skip persistence.
 
+### Multiple GPUs
+
+Commands act on GPU 0 (the first NVIDIA GPU the driver enumerates) unless `--gpu <index>` picks
+another; `status` shows each card's index. `--gpu all` runs the command on every GPU in turn — the
+same request planned from each card's own stock curve, so identical cards get the same tuning
+without sharing one card's offsets. Persisted tunings and reference curves are kept per GPU, and
+the logon task re-applies every GPU's persisted tuning; `clear` removes the selected GPU's, and the
+task only once none is left. A saved shortcut carries its `--gpu`. The active checkmark tracks one
+live link per folder, so keep per-card profile links in separate folders.
+
 ### Saving a shortcut
 
 `--save-shortcut` writes a `.lnk` in the current directory named for the settings (e.g.

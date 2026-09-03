@@ -71,6 +71,29 @@ public class PersistenceTests
         Assert.False(Persistence.IsAppSidecar(fileName, "simple-nvidia-undervolt.exe"));
     }
 
+    // --- the per-GPU store files ---
+
+    [Fact]
+    public void DataFilePath_KeepsThePlainNameForGpuZero_AndSuffixesTheOthers()
+    {
+        Assert.EndsWith(@"data\persisted-tuning.json", Persistence.DataFilePath("persisted-tuning", 0));
+        Assert.EndsWith(@"data\persisted-tuning.gpu1.json", Persistence.DataFilePath("persisted-tuning", 1));
+    }
+
+    [Theory]
+    [InlineData("persisted-tuning.json", 0)]
+    [InlineData("persisted-tuning.gpu1.json", 1)]
+    [InlineData("Persisted-Tuning.GPU12.json", 12)]
+    [InlineData("persisted-tuning.gpu0.json", null)]   // GPU 0 is the plain name
+    [InlineData("persisted-tuning.gpu-1.json", null)]
+    [InlineData("persisted-tuning.gpu.json", null)]
+    [InlineData("persisted-tuning.bak.json", null)]
+    [InlineData("reference-curve.json", null)]         // another kind
+    public void DataFileGpuIndex_InvertsTheNaming(string fileName, int? expected)
+    {
+        Assert.Equal(expected, Persistence.DataFileGpuIndex("persisted-tuning", fileName));
+    }
+
     // --- the registered command line (schtasks' /TR value) ---
 
     [Fact]

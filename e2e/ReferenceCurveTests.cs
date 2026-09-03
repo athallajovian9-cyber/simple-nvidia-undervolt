@@ -93,9 +93,9 @@ public sealed class ReferenceCurveTests
             // Re-key the saved reference to a card this isn't: the identity check must reject it
             // rather than plan another card's curve onto this one.
             ReferenceCurveDoc doc = TuningDocuments.ParseReferenceCurveDoc(
-                File.ReadAllText(ReferenceCurve.FilePath()), "the saved reference");
+                File.ReadAllText(ReferenceCurve.FilePath(0)), "the saved reference");
             doc.GpuPciIds = "DEADBEEF-DEADBEEF-DEADBEEF-DEADBEEF";
-            File.WriteAllText(ReferenceCurve.FilePath(), TuningDocuments.Render(doc));
+            File.WriteAllText(ReferenceCurve.FilePath(0), TuningDocuments.Render(doc));
 
             var (exitCode, output) = App.RunUndervolt("--mv", "900");
 

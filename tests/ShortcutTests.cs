@@ -38,6 +38,22 @@ public class ShortcutTests
     }
 
     [Fact]
+    public void Describe_NamesTheGpuSelectionOnlyWhenGiven()
+    {
+        // Per-card links saved into one directory must not overwrite each other.
+        Assert.Equal("Tune 925mV (GPU 1)", ShortcutName.Describe(Parse("tune", "--mv", "925", "--gpu", "1")));
+        Assert.Equal("Tune 925mV (all GPUs)", ShortcutName.Describe(Parse("tune", "--mv", "925", "--gpu", "all")));
+    }
+
+    [Fact]
+    public void ToShortcutArgs_CarriesTheGpuSelection()
+    {
+        var result = Parse("tune", "--mv", "960", "--gpu", "1", "--save-shortcut").ToShortcutArgs();
+
+        Assert.Equal(new[] { "--mv", "960", "--gpu", "1" }, result);
+    }
+
+    [Fact]
     public void ToShortcutArgs_DropsSaveShortcutAndDryRun()
     {
         var result = Parse("tune", "--mv", "960", "--mhz", "2880", "--save-shortcut", "--dry-run")

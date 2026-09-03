@@ -10,6 +10,10 @@ internal static class Args
     public static readonly Options Global = Options.Empty
         .WithBare("--silent");
 
+    /// <summary>The options every GPU-bound command accepts: <see cref="Global"/> plus the GPU
+    /// selector (see <see cref="GpuSelector"/>). 'install' touches no GPU and stays on Global.</summary>
+    public static readonly Options GpuBound = Global.WithValue(GpuSelector.Flag);
+
     /// <summary>How a flag consumes the token after it.</summary>
     private enum Kind
     {
@@ -47,8 +51,7 @@ internal static class Args
 
         public Parsed Parse(string[] args) => Args.Parse(args, _flags, allowPositionals: false);
 
-        public string[] Positionals(string[] args)
-            => Args.Parse(args, _flags, allowPositionals: true).Positionals;
+        public Parsed ParseWithPositionals(string[] args) => Args.Parse(args, _flags, allowPositionals: true);
     }
 
     /// <summary>The parsed token stream: each given flag mapped to its value (null for a bare flag, or

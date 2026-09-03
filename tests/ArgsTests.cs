@@ -15,7 +15,7 @@ public class ArgsTests
     public void Positionals_ThrowsOnAnUnknownFlag(string flag)
     {
         Assert.Throws<CliError>(
-            () => PositionalOptions.Positionals(new[] { "scan", flag }));
+            () => PositionalOptions.ParseWithPositionals(new[] { "scan", flag }));
     }
 
     [Fact]
@@ -23,8 +23,8 @@ public class ArgsTests
     {
         // Values and single-dash negative numbers are positionals; known flags (and their values,
         // like --save-shortcut's optional name) are consumed and don't leak into the result.
-        string[] rest = PositionalOptions.Positionals(
-            new[] { "scan", "-100", "--save-shortcut", "Quiet", "117000" });
+        string[] rest = PositionalOptions.ParseWithPositionals(
+            new[] { "scan", "-100", "--save-shortcut", "Quiet", "117000" }).Positionals;
 
         Assert.Equal(new[] { "-100", "117000" }, rest);
     }
@@ -60,6 +60,7 @@ public class ArgsTests
     [InlineData("status", "--bogus")]
     [InlineData("clear", "--no-persit")]  // a misspelled flag on a command with no options of its own
     [InlineData("watch", "--mv")]          // a tune-only flag isn't valid here
+    [InlineData("install", "--gpu")]       // install touches no GPU, so the selector isn't valid there
     public void Run_RejectsUnknownFlagOnNonTuneCommands(string command, string flag)
     {
         // Any failure exits 1. The rejection happens before any elevation or GPU access, so this needs
@@ -110,6 +111,21 @@ public class ArgsTests
 
         Assert.Equal(1, exit);
         Assert.Contains("doesn't support --silent", error);
+    }
+
+    [Theory]
+    [InlineData("watch displays one GPU", "watch", "--gpu", "all")]
+    [InlineData("--out-tuning-file exports one GPU's document", "status", "--gpu", "all", "--out-tuning-file", "t.json")]
+    [InlineData("--out-tuning-file exports one GPU's document", "tune", "--mv", "960", "--gpu", "all", "--out-tuning-file", "t.json")]
+    [InlineData("--out-curve-file exports one GPU's document", "set-reference-curve", "--gpu", "all", "--out-curve-file", "c.json")]
+    public void Run_RejectsAllGpusWhereOneIsMeant(string expected, params string[] args)
+    {
+        // A live display shows one GPU, and an export names one file - both are validated at
+        // dispatch, before any elevation or GPU access.
+        var (exit, error) = RunCapturingError(args);
+
+        Assert.Equal(1, exit);
+        Assert.Contains(expected, error);
     }
 
     [Fact]

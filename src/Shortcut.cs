@@ -309,7 +309,9 @@ internal static class Shortcut
 }
 
 /// <summary>Builds the short, human-readable file name for a <c>--save-shortcut</c> link from the
-/// tuning settings, e.g. <c>Tune 960mV 2880MHz</c> or <c>Tune -100mV +0MHz mem+1500</c>.</summary>
+/// tuning settings, e.g. <c>Tune 960mV 2880MHz</c> or <c>Tune -100mV +0MHz mem+1500</c> — plus
+/// the GPU selection when one was given (<c>Tune 960mV (GPU 1)</c>), so per-card links in one
+/// directory don't overwrite each other.</summary>
 internal static class ShortcutName
 {
     public static string Describe(TuneRequest request)
@@ -321,7 +323,8 @@ internal static class ShortcutName
             Part(request.Mem, prefix: "mem", unit: "", pctUnit: "pct"),
         };
 
-        return "Tune " + string.Join(' ', parts.Where(p => p is not null));
+        string name = "Tune " + string.Join(' ', parts.Where(p => p is not null));
+        return request.Gpu.Given ? $"{name} ({request.Gpu.Describe()})" : name;
     }
 
     /// <summary>One settings token: the value unsigned for the absolute form (<c>960mV</c>), signed for

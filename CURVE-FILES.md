@@ -119,3 +119,6 @@ The same documents are how the app stores its own state, under `data\` in the in
   `--out-tuning-file` exports). It lives under Program Files deliberately: the file is admin-only
   writable, and the elevated logon task must not consume user-writable data. `clear` removes it
   along with the task.
+
+Both are per GPU: these plain names are GPU 0's, and another GPU's carry its index as a suffix
+(`persisted-tuning.gpu1.json`).

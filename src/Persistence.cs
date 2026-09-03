@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Xml.Linq;
 
@@ -55,6 +56,50 @@ internal static class Persistence
     /// install directory's files can never touch it. Admin-only writable like everything under the
     /// install directory, which is what lets the elevated logon re-apply consume it.</summary>
     internal static string DataDir() => Path.Combine(InstallDir(), "data");
+
+    /// <summary>The data file holding one document kind for one GPU: the plain name for GPU 0, so
+    /// a single-GPU install never sees a suffix, and a <c>.gpuN</c> suffix for the others.</summary>
+    internal static string DataFilePath(string stem, int gpuIndex)
+        => Path.Combine(DataDir(), gpuIndex == 0 ? $"{stem}.json" : $"{stem}.gpu{gpuIndex}.json");
+
+    /// <summary>The GPU indexes a document kind is stored for, ascending.</summary>
+    internal static IReadOnlyList<int> StoredGpuIndexes(string stem)
+    {
+        if (!Directory.Exists(DataDir()))
+        {
+            return Array.Empty<int>();
+        }
+
+        return Directory.GetFiles(DataDir(), $"{stem}*.json")
+            .Select(file => DataFileGpuIndex(stem, Path.GetFileName(file)))
+            .OfType<int>()
+            .Order()
+            .ToArray();
+    }
+
+    /// <summary>The GPU index a file name of the kind encodes (the inverse of
+    /// <see cref="DataFilePath"/>), or null for a file that isn't one.</summary>
+    internal static int? DataFileGpuIndex(string stem, string fileName)
+    {
+        if (fileName.Equals($"{stem}.json", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+
+        string prefix = $"{stem}.gpu";
+        const string suffix = ".json";
+        if (fileName.Length <= prefix.Length + suffix.Length
+            || !fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            || !fileName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        string digits = fileName[prefix.Length..^suffix.Length];
+        return int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out int index) && index > 0
+            ? index
+            : null;
+    }
 
     private const string NoCmdSuffix = "-nocmd";
 

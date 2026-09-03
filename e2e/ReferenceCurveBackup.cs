@@ -13,16 +13,16 @@ internal sealed class ReferenceCurveBackup
 
     /// <summary>Captures the reference file's content, or null when nothing is saved.</summary>
     public static ReferenceCurveBackup Create()
-        => new(File.Exists(ReferenceCurve.FilePath()) ? File.ReadAllText(ReferenceCurve.FilePath()) : null);
+        => new(File.Exists(ReferenceCurve.FilePath(0)) ? File.ReadAllText(ReferenceCurve.FilePath(0)) : null);
 
     /// <summary>Removes the saved reference, if any. Guarded like <see cref="PersistedTuning.Remove"/>:
     /// on a host that never installed anything the data directory itself is missing, and a bare
     /// <see cref="File.Delete(string)"/> would throw instead of doing nothing.</summary>
     public static void Remove()
     {
-        if (File.Exists(ReferenceCurve.FilePath()))
+        if (File.Exists(ReferenceCurve.FilePath(0)))
         {
-            File.Delete(ReferenceCurve.FilePath());
+            File.Delete(ReferenceCurve.FilePath(0));
         }
     }
 
@@ -32,8 +32,8 @@ internal sealed class ReferenceCurveBackup
         Remove();
         if (_content is not null)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(ReferenceCurve.FilePath())!);
-            File.WriteAllText(ReferenceCurve.FilePath(), _content);
+            Directory.CreateDirectory(Path.GetDirectoryName(ReferenceCurve.FilePath(0))!);
+            File.WriteAllText(ReferenceCurve.FilePath(0), _content);
         }
     }
 }

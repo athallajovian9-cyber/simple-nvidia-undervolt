@@ -162,7 +162,11 @@ internal static class Cli
         TuneRequest request = TuneRequest.Parse(args);
         return RunWriteCommand(args, isRelayChild, request.NoElevate, () =>
         {
-            OnFirstGpu(gpu => RunTune(gpu, request, launchingLnk));
+            // The logon re-apply names no GPU: it covers every GPU a tuning was persisted for.
+            GpuSelector gpus = request.ApplyPersisted && !request.Gpu.Given
+                ? PersistedTuning.StoredSelector()
+                : request.Gpu;
+            OnSelectedGpus(gpus, gpu => RunTune(gpu, request, launchingLnk));
         }, needsElevation: !request.DryRun);
     }
 
@@ -195,13 +199,15 @@ internal static class Cli
 
     private static int RunClearCommand(string[] args, bool isRelayChild)
     {
-        // Not GPU-bound (no RunGpuCommand): it must remove the persisted re-apply even when the
-        // NVIDIA driver or GPU is gone (see RunClear).
-        return RunWriteCommand(args, isRelayChild, RunClear);
+        // Not through RunGpuCommand: it must remove the persisted re-apply even when the NVIDIA
+        // driver or GPU is gone (see RunClear).
+        Args.Parsed parsed = Args.GpuBound.WithBare("--no-elevate").Parse(args);
+        GpuSelector gpus = GpuSelector.Parse(parsed);
+        return RunWriteCommand(args, isRelayChild, parsed.Has("--no-elevate"), () => RunClear(gpus));
     }
 
-    /// <summary>A write command whose only option is <c>--no-elevate</c> (install, clear);
-    /// tune and set-reference-curve own richer option sets and call the overload below themselves.</summary>
+    /// <summary>A write command whose only option is <c>--no-elevate</c> (install); the others own
+    /// richer option sets and call the overload below themselves.</summary>
     private static int RunWriteCommand(string[] args, bool isRelayChild, Action run)
         => RunWriteCommand(args, isRelayChild,
             Args.Global.WithBare("--no-elevate").Parse(args).Has("--no-elevate"), run);
@@ -211,17 +217,19 @@ internal static class Cli
     /// result.</summary>
     private static int RunSetReferenceCommand(string[] args, bool isRelayChild)
     {
-        Args.Parsed parsed = Args.Global.WithBare("--no-elevate")
+        Args.Parsed parsed = Args.GpuBound.WithBare("--no-elevate")
             .WithValue("--in-curve-file", "--out-curve-file").Parse(args);
         string? inFile = parsed.FilePath("--in-curve-file");
         string? outFile = parsed.FilePath("--out-curve-file");
+        GpuSelector gpus = GpuSelector.Parse(parsed);
+        gpus.RequireOneForExport("--out-curve-file", outFile);
         return RunWriteCommand(args, isRelayChild, parsed.Has("--no-elevate"),
-            () => OnFirstGpu(gpu => RunSetReference(gpu, inFile, outFile)));
+            () => OnSelectedGpus(gpus, gpu => RunSetReference(gpu, inFile, outFile)));
     }
 
     private static int RunWatchCommand(string[] args)
     {
-        Args.Parsed parsed = Args.Global.WithValue("--interval").Parse(args);
+        Args.Parsed parsed = Args.GpuBound.WithValue("--interval").Parse(args);
 
         // --silent holds all output back until the run ends, but watch IS its live output: a silent
         // watch would poll invisibly until Ctrl+C and then discard everything. Reject the combination
@@ -241,7 +249,14 @@ internal static class Cli
             throw new CliError("watch is a live display and needs a console - run it from a terminal.");
         }
 
-        OnFirstGpu(gpu => Diagnostics.Watch(gpu, intervalMs));
+        // The display runs until Ctrl+C, so 'all' would only ever show the first GPU.
+        GpuSelector gpus = GpuSelector.Parse(parsed);
+        if (gpus.IsAll)
+        {
+            throw new CliError("watch displays one GPU - pass --gpu <index>.");
+        }
+
+        OnSelectedGpus(gpus, gpu => Diagnostics.Watch(gpu.Handle, intervalMs));
         return 0;
     }
 
@@ -263,26 +278,42 @@ internal static class Cli
     /// <summary>A GPU-bound command that validates its arguments before touching NVAPI.</summary>
     private static int RunGpuCommand(string[] args, Action<IntPtr> run)
     {
-        Args.Global.Parse(args);
-        OnFirstGpu(run);
+        GpuSelector gpus = GpuSelector.Parse(Args.GpuBound.Parse(args));
+        OnSelectedGpus(gpus, Labelled(gpus, run));
         return 0;
     }
 
     /// <summary>A read-only diagnostics command with free-form positional arguments: the flags are
-    /// validated against the global set, then the command-specific positional arguments are parsed
-    /// before NVAPI starts.</summary>
+    /// validated against the GPU-bound set, then the command-specific positional arguments are
+    /// parsed before NVAPI starts.</summary>
     private static int RunPositional<T>(string[] args, Func<string[], T> parse, Action<IntPtr, T> run)
     {
-        string[] rest = Args.Global.Positionals(args);
-        T value = parse(rest);
-        OnFirstGpu(gpu => run(gpu, value));
+        Args.Parsed parsed = Args.GpuBound.ParseWithPositionals(args);
+        T value = parse(parsed.Positionals);
+        GpuSelector gpus = GpuSelector.Parse(parsed);
+        OnSelectedGpus(gpus, Labelled(gpus, gpu => run(gpu, value)));
         return 0;
     }
 
-    /// <summary>Initializes NVAPI, runs <paramref name="run"/> against the first NVIDIA GPU (a multi-GPU
-    /// selector isn't worth the surface here) and unloads. An unavailable driver or an empty enumeration
-    /// throws a <see cref="CliError"/> that Run's catch reports.</summary>
-    private static void OnFirstGpu(Action<IntPtr> run)
+    /// <summary>A diagnostics run, which prints no header of its own: under 'all', each block is
+    /// titled with its GPU so identical cards' dumps stay attributable.</summary>
+    private static Action<SelectedGpu> Labelled(GpuSelector gpus, Action<IntPtr> run)
+        => gpu =>
+        {
+            if (gpus.IsAll)
+            {
+                Console.WriteLine($"{gpu.Label}:");
+            }
+
+            run(gpu.Handle);
+        };
+
+    /// <summary>Initializes NVAPI, runs <paramref name="run"/> against each selected GPU in index
+    /// order and unloads. With several selected, one GPU's failure — a selected index with no card
+    /// included — doesn't stop the others: the cards are independent, so the failures are collected
+    /// and thrown together at the end. An unavailable driver or an empty enumeration throws a
+    /// <see cref="CliError"/> that Run's catch reports.</summary>
+    private static void OnSelectedGpus(GpuSelector selector, Action<SelectedGpu> run)
     {
         try
         {
@@ -302,7 +333,37 @@ internal static class Cli
                 throw new CliError("No NVIDIA GPUs found.");
             }
 
-            run(gpus[0]);
+            // The range check sits inside the per-GPU try: a persisted tuning whose card is gone
+            // must not keep the cards still present from getting theirs at logon.
+            IReadOnlyList<int> indexes = selector.IndexesOn(gpus.Length);
+            var failures = new List<string>();
+            for (int i = 0; i < indexes.Count; i++)
+            {
+                if (i > 0)
+                {
+                    Console.WriteLine();
+                }
+
+                int index = indexes[i];
+                try
+                {
+                    if (index >= gpus.Length)
+                    {
+                        throw selector.MissingGpu(index, gpus.Length);
+                    }
+
+                    run(new SelectedGpu(gpus[index], index, gpus.Length));
+                }
+                catch (Exception ex) when (indexes.Count > 1)
+                {
+                    failures.Add($"GPU {index}: {ErrorReporter.Describe(ex)}");
+                }
+            }
+
+            if (failures.Count > 0)
+            {
+                throw new CliError(string.Join("\n", failures));
+            }
         }
         finally
         {
@@ -315,19 +376,21 @@ internal static class Cli
     /// export writes a user file), so it never elevates.</summary>
     private static int RunStatusCommand(string[] args)
     {
-        Args.Parsed parsed = Args.Global.WithValue("--out-tuning-file").Parse(args);
+        Args.Parsed parsed = Args.GpuBound.WithValue("--out-tuning-file").Parse(args);
         string? outTuningFile = parsed.FilePath("--out-tuning-file");
-        OnFirstGpu(gpu => RunStatus(gpu, outTuningFile));
+        GpuSelector gpus = GpuSelector.Parse(parsed);
+        gpus.RequireOneForExport("--out-tuning-file", outTuningFile);
+        OnSelectedGpus(gpus, gpu => RunStatus(gpu, outTuningFile));
         return 0;
     }
 
-    private static void RunStatus(IntPtr gpu, string? outTuningFile)
+    private static void RunStatus(SelectedGpu gpu, string? outTuningFile)
     {
         // The Task Scheduler query spawns a slow child process and is independent of the GPU reads -
         // run it alongside them.
         Task<string> startupTask = Task.Run(Persistence.DescribeStartupTask);
-        var tuning = TuningSnapshot.Read(gpu);
-        Console.WriteLine(tuning.Name);
+        var tuning = TuningSnapshot.Read(gpu.Handle);
+        Console.WriteLine(gpu.Label);
         Console.WriteLine($"  Core curve offset: {tuning.DescribeCoreCurve()}");
         Console.WriteLine($"  Memory clock: {tuning.DescribeMemoryClock()}");
         Console.WriteLine($"  Core voltage boost: {tuning.DescribeVoltageBoost()}");
@@ -339,11 +402,11 @@ internal static class Cli
         // may be wrong. Warn (don't fail - status is read-only) and dump the detected layout for a report.
         try
         {
-            if (!GpuTuning.CurveVoltsPlausible(NvApi.GetVfCurve(gpu)))
+            if (!GpuTuning.CurveVoltsPlausible(NvApi.GetVfCurve(gpu.Handle)))
             {
                 Console.WriteLine($"  Warning: {GpuTuning.UnrecognizedCurvePhrase} - the tuning-buffer "
                                   + "offsets may not match this GPU, so the readings may be wrong.");
-                PrintIndented(GpuTuning.DetectedLayoutReport(gpu));
+                PrintIndented(GpuTuning.DetectedLayoutReport(gpu.Handle));
             }
         }
         catch (Exception)
@@ -365,19 +428,19 @@ internal static class Cli
     /// <see cref="AppliedTuning"/>), each tuned anchor named by its voltage on the stock curve: the
     /// saved reference when it is usable for this card, else the stock curve recovered
     /// live-minus-deltas. The file re-applies with 'tune --in-tuning-file'.</summary>
-    private static IReadOnlyList<string> ExportAppliedTuning(IntPtr gpu, string path)
+    private static IReadOnlyList<string> ExportAppliedTuning(SelectedGpu gpu, string path)
     {
-        IReadOnlyList<(int Mv, int Mhz)> live = NvApi.GetVfCurve(gpu);
+        IReadOnlyList<(int Mv, int Mhz)> live = NvApi.GetVfCurve(gpu.Handle);
         if (!GpuTuning.CurveVoltsPlausible(live))
         {
-            throw GpuTuning.UnrecognizedCurveError(gpu, "export the applied tuning");
+            throw GpuTuning.UnrecognizedCurveError(gpu.Handle, "export the applied tuning");
         }
 
-        AppliedTuning applied = AppliedTuning.Read(gpu);
+        AppliedTuning applied = AppliedTuning.Read(gpu.Handle);
         IReadOnlyList<(int Mv, int Mhz)> stock = ReferenceCurve.Match(gpu).Curve
                                                  ?? GpuTuning.SubtractDeltas(live, applied.CurveDeltasKhz);
 
-        TuningDoc doc = TuningDocuments.MakeTuningDoc(GpuIdentity.Read(gpu), stock, applied);
+        TuningDoc doc = TuningDocuments.MakeTuningDoc(GpuIdentity.Read(gpu.Handle), stock, applied);
         var log = new List<string>();
         if (applied.IsStock)
         {
@@ -389,23 +452,25 @@ internal static class Cli
         return log;
     }
 
-    /// <summary>'clear' resets the GPU and removes the persisted re-apply, as two independent halves:
-    /// an unreachable driver/GPU (the card may simply be gone) or a reset the driver rejects doesn't stop
-    /// persistence being removed — the likely reason for a clear is wanting the undervolt gone, and
-    /// leaving the task would just bring it back at the next logon. Both halves run; if either failed,
-    /// their messages are collected and thrown together so Run reports them and exits non-zero.</summary>
-    private static void RunClear()
+    /// <summary>'clear' resets the selected GPUs and removes their persisted re-apply, as two
+    /// independent halves: an unreachable driver/GPU (the card may simply be gone) or a reset the
+    /// driver rejects doesn't stop persistence being removed — the likely reason for a clear is
+    /// wanting the undervolt gone, and leaving the task would just bring it back at the next logon.
+    /// The logon task itself goes only once no GPU has a persisted tuning left. Both halves run; if
+    /// either failed, their messages are collected and thrown together so Run reports them and
+    /// exits non-zero.</summary>
+    private static void RunClear(GpuSelector gpus)
     {
         WarnIfNotElevated();
 
         var failures = new List<string>();
         try
         {
-            OnFirstGpu(gpu =>
+            OnSelectedGpus(gpus, gpu =>
             {
-                Console.WriteLine($"Resetting {NvApi.SafeFullName(gpu)} to stock "
+                Console.WriteLine($"Resetting {gpu.Label} to stock "
                                   + "(core V/F curve, memory offset and voltage boost).");
-                PrintIndented(GpuTuning.Clear(gpu));
+                PrintIndented(GpuTuning.Clear(gpu.Handle));
             });
         }
         catch (Exception ex)
@@ -416,11 +481,22 @@ internal static class Cli
 
         try
         {
-            Console.WriteLine($"  {Persistence.RemoveLogonTask()}");
-            if (PersistedTuning.Remove())
+            // 'all' means every stored file here: this half must not depend on an enumeration the
+            // reset half may have failed to get.
+            foreach (int index in gpus.Indexes ?? PersistedTuning.StoredGpuIndexes())
             {
-                Console.WriteLine("  Removed the persisted tuning file.");
+                if (PersistedTuning.Remove(index))
+                {
+                    Console.WriteLine(index == 0
+                        ? "  Removed the persisted tuning file."
+                        : $"  Removed GPU {index}'s persisted tuning file.");
+                }
             }
+
+            Console.WriteLine(PersistedTuning.StoredGpuIndexes().Count == 0
+                ? $"  {Persistence.RemoveLogonTask()}"
+                : "  The logon task stays: another GPU still has a persisted tuning "
+                  + "('clear --gpu all' removes every one).");
         }
         catch (Exception ex)
         {
@@ -442,9 +518,9 @@ internal static class Cli
     /// <c>--in-curve-file</c>, from a previously exported file, validated against the live card
     /// here so a wrong file fails now rather than as a silent live-planning fallback at tune time.
     /// <c>--out-curve-file</c> additionally exports the document just stored.</summary>
-    private static void RunSetReference(IntPtr gpu, string? inFile, string? outFile)
+    private static void RunSetReference(SelectedGpu gpu, string? inFile, string? outFile)
     {
-        Console.WriteLine($"Setting the reference curve for {NvApi.SafeFullName(gpu)}:");
+        Console.WriteLine($"Setting the reference curve for {gpu.Label}:");
         WarnIfNotElevated();
 
         ReferenceCurveDoc doc = inFile is null ? CaptureReference(gpu, outFile) : ImportReference(gpu, inFile);
@@ -457,21 +533,21 @@ internal static class Cli
     }
 
     /// <summary>Captures the stock curve from the card and saves it as the reference.</summary>
-    private static ReferenceCurveDoc CaptureReference(IntPtr gpu, string? outFile)
+    private static ReferenceCurveDoc CaptureReference(SelectedGpu gpu, string? outFile)
     {
         // Read the identity before the capture: the capture can reset the tuning and fail to put it
         // back, and a later step throwing must not be how the user finds out - it would report the
         // save or identity error alone and never mention the tuning it lost.
-        GpuIdentity identity = GpuIdentity.Read(gpu);
-        GpuTuning.ReferenceCapture capture = GpuTuning.CaptureStockForReference(gpu);
+        GpuIdentity identity = GpuIdentity.Read(gpu.Handle);
+        GpuTuning.ReferenceCapture capture = GpuTuning.CaptureStockForReference(gpu.Handle);
         PrintIndented(capture.Log);
 
         ReferenceCurveDoc doc;
         try
         {
-            int? tempC = TryReadTemperatureC(gpu);
+            int? tempC = TryReadTemperatureC(gpu.Handle);
             doc = TuningDocuments.MakeReferenceCurveDoc(identity, capture.Stock, tempC);
-            ReferenceCurve.Save(doc);
+            ReferenceCurve.Save(doc, gpu.Index);
             Console.WriteLine($"  Saved {capture.Stock.Count} stock points"
                               + $"{(tempC is { } t ? $", captured at {t} C" : string.Empty)}.");
         }
@@ -496,7 +572,7 @@ internal static class Cli
     /// <summary>Saves a previously exported curve file as this machine's reference, validated
     /// against the live card here — a usable frequency column and a match on identity and anchors —
     /// so a wrong file fails now rather than as a silent live-planning fallback at tune time.</summary>
-    private static ReferenceCurveDoc ImportReference(IntPtr gpu, string inFile)
+    private static ReferenceCurveDoc ImportReference(SelectedGpu gpu, string inFile)
     {
         ReferenceCurveDoc doc = TuningDocuments.ReadReferenceCurveFile(inFile);
         IReadOnlyList<(int Mv, int Mhz)> points = TuningDocuments.Points(doc);
@@ -505,19 +581,19 @@ internal static class Cli
             throw new CliError($"{inFile}: the curve's frequency column isn't usable - re-export it.");
         }
 
-        if (TuningDocuments.RequireMatchesGpu(doc.GpuName, doc.GpuPciIds, gpu,
+        if (TuningDocuments.RequireMatchesGpu(doc.GpuName, doc.GpuPciIds, gpu.Handle,
                 $"The curve file {inFile}") is { } warning)
         {
             Console.WriteLine($"  {warning}");
         }
 
-        if (!ReferenceCurve.AnchorsMatch(points, NvApi.GetVfCurve(gpu)))
+        if (!ReferenceCurve.AnchorsMatch(points, NvApi.GetVfCurve(gpu.Handle)))
         {
             throw new CliError($"The curve file {inFile} doesn't match this GPU's curve anchors "
                                + "(driver or vBIOS change since the capture?) - re-export it.");
         }
 
-        ReferenceCurve.Save(doc);
+        ReferenceCurve.Save(doc, gpu.Index);
         Console.WriteLine($"  Reference set from {inFile} ({points.Count} stock points, "
                           + $"{TuningDocuments.DescribeCapture(doc.SavedAt)}).");
         return doc;
@@ -548,7 +624,7 @@ internal static class Cli
         }
     }
 
-    private static void RunTune(IntPtr gpu, TuneRequest request, string? launchingLnk)
+    private static void RunTune(SelectedGpu gpu, TuneRequest request, string? launchingLnk)
     {
         if (request.IsReplay)
         {
@@ -588,14 +664,14 @@ internal static class Cli
                     // exposes is kept as the write-verification baseline: the plan's frequencies come
                     // from the reference, so judging the read-back against them would let the thermal
                     // shift between the two pass for a landed write (see VerifyWriteReachedCurve).
-                    referenceBaseline = GpuTuning.ResetAndReadVerificationBaseline(gpu);
+                    referenceBaseline = GpuTuning.ResetAndReadVerificationBaseline(gpu.Handle);
                 }
             }
             else
             {
                 stock = request.DryRun
-                    ? GpuTuning.RecoverStockReadOnly(gpu)
-                    : GpuTuning.ResetAndReadStock(gpu);
+                    ? GpuTuning.RecoverStockReadOnly(gpu.Handle)
+                    : GpuTuning.ResetAndReadStock(gpu.Handle);
             }
 
             // Build the plan before the memory/curve writes: it needs a clean curve read, so a collapsed
@@ -613,7 +689,7 @@ internal static class Cli
         (int TargetMhz, int DeltaKhz)? memory = null;
         if (request.Mem.IsSet)
         {
-            int baseMemMhz = GpuTuning.BaseMemoryClockMhz(gpu);
+            int baseMemMhz = GpuTuning.BaseMemoryClockMhz(gpu.Handle);
             var (memMhz, memDelta) = request.ResolveMemory(baseMemMhz);
             memory = (memMhz, memDelta);
             Console.WriteLine($"  Memory: {TuningSnapshot.DescribeMemoryClock(memMhz, baseMemMhz)}");
@@ -626,13 +702,13 @@ internal static class Cli
         {
             PrintIndented(request.DryRun
                 ? GpuTuning.DescribePlan(plan, targetMhz)
-                : GpuTuning.Apply(gpu, plan, planStock!, targetMhz, memory?.DeltaKhz, referenceBaseline));
+                : GpuTuning.Apply(gpu.Handle, plan, planStock!, targetMhz, memory?.DeltaKhz, referenceBaseline));
         }
         else if (memory is { } mem)
         {
             PrintIndented(request.DryRun
                 ? new[] { $"[dry run] Would reset to stock and set the memory clock to {mem.TargetMhz} MHz." }
-                : GpuTuning.ApplyMemoryOnly(gpu, mem.DeltaKhz));
+                : GpuTuning.ApplyMemoryOnly(gpu.Handle, mem.DeltaKhz));
         }
 
         // Save the shortcut only now the request has resolved and validated (and, on a real run, the
@@ -664,7 +740,7 @@ internal static class Cli
         // writes. Built once; the plan's stock curve names the tuned anchors, and a memory-only run
         // has none to name, so it needs no curve at all.
         TuningDoc? runDoc = null;
-        TuningDoc RunDoc() => runDoc ??= TuningDocuments.MakeTuningDoc(GpuIdentity.Read(gpu),
+        TuningDoc RunDoc() => runDoc ??= TuningDocuments.MakeTuningDoc(GpuIdentity.Read(gpu.Handle),
             planStock ?? Array.Empty<(int Mv, int Mhz)>(),
             new AppliedTuning(plan?.DeltasKhz ?? Array.Empty<int>(), memory?.DeltaKhz ?? 0));
 
@@ -682,13 +758,13 @@ internal static class Cli
             PrintIndented(Shortcut.MarkActive(liveLnk));
         }
 
-        FinishRealRun(request, RunDoc);
+        FinishRealRun(gpu.Index, request, RunDoc);
     }
 
-    private static void PrintRunHeader(IntPtr gpu, TuneRequest request)
+    private static void PrintRunHeader(SelectedGpu gpu, TuneRequest request)
         => Console.WriteLine(request.DryRun
-            ? $"Dry run for {NvApi.SafeFullName(gpu)} - nothing will be written:"
-            : $"Tuning {NvApi.SafeFullName(gpu)}:");
+            ? $"Dry run for {gpu.Label} - nothing will be written:"
+            : $"Tuning {gpu.Label}:");
 
     /// <summary>Writes the run's tuning document to <c>--out-tuning-file</c> when asked. The export
     /// mirrors the shortcut: on a dry run the file is the deliverable, after a real apply it records
@@ -704,11 +780,11 @@ internal static class Cli
     /// <summary>A real run's shared tail — persist, export, sign off — for the planned and replay
     /// paths alike. <paramref name="doc"/> is a factory so a run that neither persists nor exports
     /// never builds the document.</summary>
-    private static void FinishRealRun(TuneRequest request, Func<TuningDoc> doc)
+    private static void FinishRealRun(int gpuIndex, TuneRequest request, Func<TuningDoc> doc)
     {
         if (request.Persist)
         {
-            PersistTuning(doc());
+            PersistTuning(doc(), gpuIndex);
         }
 
         ExportTuningFile(request, doc);
@@ -719,11 +795,11 @@ internal static class Cli
             : "Done (not persisted). Use 'clear' to restore stock; omit --no-persist to re-apply at logon.");
     }
 
-    /// <summary>Persists a tuning document for the logon re-apply: installs the app, stores the
-    /// document as a file beside it (see <see cref="PersistedTuning"/>) and registers the logon
+    /// <summary>Persists a GPU's tuning document for the logon re-apply: installs the app, stores
+    /// the document as a file beside it (see <see cref="PersistedTuning"/>) and registers the logon
     /// task that applies it. A failure here must not read as a failed tuning — the caller's apply
     /// is live — so it reports as its own anticipated error with the retry guidance.</summary>
-    private static void PersistTuning(TuningDoc doc)
+    private static void PersistTuning(TuningDoc doc, int gpuIndex)
     {
         try
         {
@@ -732,8 +808,8 @@ internal static class Cli
                 Console.WriteLine($"Installed to {Persistence.InstallDir()}.");
             }
 
-            PersistedTuning.Save(doc);
-            Console.WriteLine($"Saved the tuning to apply at logon: {PersistedTuning.FilePath()}");
+            PersistedTuning.Save(doc, gpuIndex);
+            Console.WriteLine($"Saved the tuning to apply at logon: {PersistedTuning.FilePath(gpuIndex)}");
             Console.WriteLine(Persistence.RegisterLogonTask());
         }
         catch (Exception ex)
@@ -752,18 +828,18 @@ internal static class Cli
     /// is validated against the live card first — the identity fields it names, and every tuned
     /// anchor's voltage against the live table — so a foreign or stale one fails as a named error
     /// before anything is written.</summary>
-    private static void RunReplay(IntPtr gpu, TuneRequest request)
+    private static void RunReplay(SelectedGpu gpu, TuneRequest request)
     {
         PrintRunHeader(gpu, request);
 
         (TuningDoc doc, string source) = request.InTuningFile is { } file
             ? (TuningDocuments.ReadTuningFile(file), $"the tuning file {file}")
-            : (PersistedTuning.Load(), $"the persisted tuning ({PersistedTuning.FilePath()})");
+            : (PersistedTuning.Load(gpu.Index), $"the persisted tuning ({PersistedTuning.FilePath(gpu.Index)})");
         Console.WriteLine($"  Re-applying the tuning from {source} "
                           + $"({TuningDocuments.DescribeCapture(doc.SavedAt)}).");
 
         string what = $"The tuning from {source}";
-        if (TuningDocuments.RequireMatchesGpu(doc.GpuName, doc.GpuPciIds, gpu, what) is { } warning)
+        if (TuningDocuments.RequireMatchesGpu(doc.GpuName, doc.GpuPciIds, gpu.Handle, what) is { } warning)
         {
             Console.WriteLine($"  {warning}");
         }
@@ -771,17 +847,17 @@ internal static class Cli
         // The write path refuses an unrecognized card on its own; checking here puts the refusal
         // before any output that reads like progress. The live read also backs the anchor and
         // absolute-clock resolution below - the voltage column is valid at any power state.
-        IReadOnlyList<(int Mv, int Mhz)> live = NvApi.GetVfCurve(gpu);
+        IReadOnlyList<(int Mv, int Mhz)> live = NvApi.GetVfCurve(gpu.Handle);
         if (!GpuTuning.CurveVoltsPlausible(live))
         {
-            throw GpuTuning.UnrecognizedCurveError(gpu, "apply the tuning");
+            throw GpuTuning.UnrecognizedCurveError(gpu.Handle, "apply the tuning");
         }
 
         // The same plausibility bound the planned path puts on a requested memory clock - a replay
         // must not write a memory offset no plan could have produced.
         if (doc.MemoryOffset != 0)
         {
-            int baseMemMhz = GpuTuning.BaseMemoryClockMhz(gpu);
+            int baseMemMhz = GpuTuning.BaseMemoryClockMhz(gpu.Handle);
             TuneRequest.RequirePlausibleMemoryClock(baseMemMhz + (long)doc.MemoryOffset, baseMemMhz);
         }
 
@@ -802,15 +878,15 @@ internal static class Cli
             // entries, the offset derivation - read-only, like the rest of the dry run. A real run
             // re-resolves against the clean post-reset read inside ApplyExact.
             TuningDocuments.ResolveCurveOffsetsKhz(doc, live,
-                () => reference.Curve ?? GpuTuning.RecoverStockReadOnly(gpu), what);
+                () => reference.Curve ?? GpuTuning.RecoverStockReadOnly(gpu.Handle), what);
             Console.WriteLine("  [dry run] Would reset to stock and write these offsets.");
             ExportTuningFile(request, () => doc);
             return;
         }
 
         WarnIfNotElevated();
-        PrintIndented(GpuTuning.ApplyExact(gpu, doc, reference.Curve, live, what));
-        FinishRealRun(request, () => doc);
+        PrintIndented(GpuTuning.ApplyExact(gpu.Handle, doc, reference.Curve, live, what));
+        FinishRealRun(gpu.Index, request, () => doc);
     }
 
     /// <summary>The document's tuning, summarized before the apply the way status renders an
@@ -923,6 +999,10 @@ internal static class Cli
                                 accept it too).
 
             Options:
+              --gpu <n>|all     The GPU to act on, by index in the driver's enumeration (default 0;
+                                'status' shows it); 'all' runs the command on every GPU in turn.
+                                (Not accepted by 'install'; 'watch' and the file exports take one
+                                index.)
               --silent          No output - and no message box - unless the run fails.
                                 (Not accepted by 'watch', which is a live display.)
               --version         Print the version and exit.
@@ -930,7 +1010,8 @@ internal static class Cli
 
             Each real run resets to stock first, then reads the curve back to confirm the write landed.
             Run without a console (a double-clicked link, the logon task), the result is shown in a
-            message box. On a multi-GPU system, commands operate on the first NVIDIA GPU enumerated.
+            message box. Persisted tunings and reference curves are kept per GPU; the logon task
+            re-applies every GPU's persisted tuning.
             Exit codes: 0 on success, 1 on any failure.
 
             Run 'simple-nvidia-undervolt --help-diagnostics' for the NVAPI inspection commands.

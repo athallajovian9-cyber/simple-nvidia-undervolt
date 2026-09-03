@@ -97,6 +97,10 @@ internal sealed class TuneRequest
     /// <summary>Run in place without auto-elevating (<c>--no-elevate</c>).</summary>
     public bool NoElevate { get; private init; }
 
+    /// <summary>The GPU(s) the run targets (<c>--gpu</c>). Re-emitted into a saved shortcut, so a
+    /// link stays that card's.</summary>
+    public GpuSelector Gpu { get; private init; } = GpuSelector.Default;
+
     /// <summary>Whether the run is <c>--silent</c> (no output and no result box unless it fails).
     /// Re-emitted into a saved shortcut's command line (see <see cref="ToShortcutArgs"/>).</summary>
     private bool Silent { get; init; }
@@ -104,7 +108,7 @@ internal sealed class TuneRequest
     /// <summary>Default width of the cap band (anchors holding the cap's offset, cap included).</summary>
     public const int DefaultCapPoints = 25;
 
-    private static readonly Args.Options Options = Args.Global
+    private static readonly Args.Options Options = Args.GpuBound
         .WithBare("--no-elevate", "--no-persist", "--dry-run", "--apply-persisted")
         .WithValue(
             "--mv", "--mv-offset", "--mv-pct",
@@ -132,8 +136,11 @@ internal sealed class TuneRequest
             ShortcutNameOverride = parsed.Value("--save-shortcut"),
             DryRun = parsed.Has("--dry-run"),
             NoElevate = parsed.Has("--no-elevate"),
+            Gpu = GpuSelector.Parse(parsed),
             Silent = parsed.Has("--silent"),
         };
+
+        request.Gpu.RequireOneForExport("--out-tuning-file", request.OutTuningFile);
 
         // A replay re-applies a stored tuning exactly - the document is the whole tuning, so any
         // option that would steer it is a contradiction, not an input.
@@ -321,6 +328,7 @@ internal sealed class TuneRequest
         AddSpec(args, "--mem", Mem);
         AddNumber(args, "--peak-mv", PeakMv);
         AddCapPoints(args);
+        args.AddRange(Gpu.ToArgs());
         if (!Persist)
         {
             args.Add("--no-persist");

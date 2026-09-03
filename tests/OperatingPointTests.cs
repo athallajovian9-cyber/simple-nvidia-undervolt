@@ -204,7 +204,6 @@ public class OperatingPointTests
 
     private static TuningSnapshot Snapshot(int[] offsetsKhz, (int Mv, int Mhz)? point) => new()
     {
-        Name = "GPU",
         CoreCurveOffsetsKhz = Reading<int[]>.Success(offsetsKhz),
         OperatingPoint = point,
     };

@@ -8,7 +8,6 @@ namespace SimpleNvidiaUndervolt;
 /// </summary>
 internal sealed class TuningSnapshot
 {
-    public required string Name { get; init; }
     public Reading<int[]> CoreCurveOffsetsKhz { get; init; }
 
     /// <summary>The effective curve's operating point — where the boost settles under load, see
@@ -22,7 +21,6 @@ internal sealed class TuningSnapshot
 
     public static TuningSnapshot Read(IntPtr gpu) => new()
     {
-        Name = NvApi.SafeFullName(gpu),
         CoreCurveOffsetsKhz = Reading.Try(() => GpuTuning.CurveDeltasKhz(gpu).Where(d => d != 0).ToArray()),
         OperatingPoint = ReadOperatingPoint(gpu),
         MemoryClockKhz = Reading.Try(() => ReadMemoryClockKhz(NvApi.GetPstates20(gpu))),
