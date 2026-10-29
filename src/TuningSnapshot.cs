@@ -55,17 +55,17 @@ internal sealed class TuningSnapshot
     /// frequency with any offset folded in, so the delta is measured against the factory base.</summary>
     private static int ReadCoreClockOffsetMhz(IntPtr gpu, Pstates20InfoV1 info)
     {
-        var entry = GpuTuning.P0Clock(info, NvApi.CLOCK_DOMAIN_GRAPHICS);
-        if (entry is null)
+        Pstate20ClockEntry? entry = GpuTuning.P0Clock(info, NvApi.CLOCK_DOMAIN_GRAPHICS);
+        if (entry is not { } clock)
         {
             return 0;
         }
 
         uint baseKhz = NvApi.GetClockFrequencyKhz(
             gpu, NvApi.CLOCK_FREQ_TYPE_BASE, NvApi.CLOCK_DOMAIN_GRAPHICS);
-        return entry.Data0 > 0 && baseKhz > 0
-            ? (int)entry.Data0 - (int)baseKhz
-            : (int)entry.FreqDeltaKhz.Value;
+        return clock.Data0 > 0 && baseKhz > 0
+            ? (int)clock.Data0 - (int)baseKhz
+            : (int)clock.FreqDeltaKhz.Value;
     }
 
     // --- Display ---

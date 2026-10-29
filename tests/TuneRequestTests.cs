@@ -463,8 +463,9 @@ public class TuneRequestTests
     [Theory]
     [InlineData("--core-offset")]
     [InlineData("--core-offset", "50", "--core-offset", "100")]
-    public void DuplicatedCoreOffset_Throws(params string[] args)
+    public void DuplicatedCoreOffset_Throws(params string[] extraArgs)
     {
-        Assert.Throws<CliError>(() => Parse("tune", args));
+        string[] args = new[] { "tune" }.Concat(extraArgs).ToArray();
+        Assert.Throws<CliError>(() => Parse(args));
     }
 }

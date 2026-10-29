@@ -717,12 +717,12 @@ internal static class Cli
                 ? new[] { $"[dry run] Would reset to stock and set the memory clock to {mem.TargetMhz} MHz." }
                 : GpuTuning.ApplyMemoryOnly(gpu.Handle, mem.DeltaKhz, request.CoreOffsetMhz ?? 0));
         }
-        else if (request.CoreOffsetMhz is { } coreOffset)
+        else if (request.CoreOffsetMhz is { } coreOffMhz)
         {
             // Core offset only — no curve cap, no memory. Reset to stock then write just the offset.
             PrintIndented(request.DryRun
-                ? new[] { $"[dry run] Would reset to stock and set the core clock offset to {coreOffset:+0;-0} MHz." }
-                : GpuTuning.ApplyCoreOffsetOnly(gpu.Handle, coreOffset));
+                ? new[] { $"[dry run] Would reset to stock and set the core clock offset to {coreOffMhz:+0;-0} MHz." }
+                : GpuTuning.ApplyCoreOffsetOnly(gpu.Handle, coreOffMhz));
         }
 
         // Save the shortcut only now the request has resolved and validated (and, on a real run, the
