@@ -418,4 +418,53 @@ public class TuneRequestTests
             () => Parse("tune", "--mv", "960", "--mem", mem).ResolveMemory(baseMemMhz: 14001));
     }
 
+    // --- Core clock offset (--core-offset) ---
+
+    [Fact]
+    public void CoreOffsetAlone_Parses()
+    {
+        var request = Parse("tune", "--core-offset", "50");
+        Assert.Equal(50, request.CoreOffsetMhz);
+        Assert.False(request.Mv.IsSet);
+        Assert.False(request.Mem.IsSet);
+    }
+
+    [Fact]
+    public void CoreOffsetNegative_Parses()
+    {
+        var request = Parse("tune", "--core-offset", "-100");
+        Assert.Equal(-100, request.CoreOffsetMhz);
+    }
+
+    [Fact]
+    public void CoreOffsetAndVoltageCap_Parses()
+    {
+        var request = Parse("tune", "--mv", "925", "--core-offset", "100");
+        Assert.Equal(925, request.Mv.Absolute);
+        Assert.Equal(100, request.CoreOffsetMhz);
+    }
+
+    [Fact]
+    public void CoreOffsetAndMemory_Parses()
+    {
+        var request = Parse("tune", "--mem-offset", "500", "--core-offset", "-50");
+        Assert.Equal(500, request.Mem.Offset);
+        Assert.Equal(-50, request.CoreOffsetMhz);
+    }
+
+    [Fact]
+    public void CoreOffsetAlone_DoesNotNeedAPeak()
+    {
+        // Core offset is absolute — no --peak-mv needed.
+        var request = Parse("tune", "--core-offset", "50");
+        Assert.Equal(50, request.CoreOffsetMhz);
+    }
+
+    [Theory]
+    [InlineData("--core-offset")]
+    [InlineData("--core-offset", "50", "--core-offset", "100")]
+    public void DuplicatedCoreOffset_Throws(params string[] args)
+    {
+        Assert.Throws<CliError>(() => Parse("tune", args));
+    }
 }
